@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="apple-mobile-web-app-title" content="MeetingNotes"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="theme-color" content="#4f46e5"/>
+<title>MeetingNotes</title>
+<link rel="manifest" href="manifest.json"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+html,body,#root{height:100%;height:100dvh;}
+body{font-family:'Noto Sans KR',sans-serif;background:#f8fafc;overflow:hidden;}
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:#e2e8f0;border-radius:3px}
+input,textarea,select,button{font-family:'Noto Sans KR',sans-serif;-webkit-appearance:none;appearance:none;}
+input:focus,textarea:focus{outline:none;}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes recPulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.4)}70%{box-shadow:0 0 0 14px rgba(239,68,68,0)}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideOutRight{from{opacity:1;transform:translateX(0)}to{opacity:0;transform:translateX(30px)}}
+.spin{animation:spin 1s linear infinite}
+.fadeUp{animation:fadeUp .22s ease forwards}
+.screen{position:absolute;inset:0;display:flex;flex-direction:column;background:#fff;}
+.screen-enter{animation:slideInRight .25s ease forwards}
+.screen-exit{animation:slideOutRight .2s ease forwards;pointer-events:none;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel" data-presets="react">
+const {useState,useEffect,useMemo,useRef,useCallback}=React;
+const A="#4f46e5",AL="#eef2ff";
+
+/* ── localStorage helpers ── */
+const ls=(k,v)=>{try{if(v===undefined){const x=localStorage.getItem(k);return x?JSON.parse(x):null;}localStorage.setItem(k,JSON.stringify(v));}catch{return null;}};
+
+/* ── Firebase REST ── */
+const AUTH="https://identitytoolkit.googleapis.com/v1/accounts";
+const RTOK="https://securetoken.googleapis.com/v1/token";
+const rtdb=(pid,uid)=>`https://${pid}-default-rtdb.firebaseio.com/users/${uid}/notes.json`;
+const KO={EMAIL_EXISTS:"이미 사용 중인 이메일입니다.",INVALID_PASSWORD:"비밀번호가 올바르지 않습니다.",EMAIL_NOT_FOUND:"등록되지 않은 이메일입니다.",INVALID_LOGIN_CREDENTIALS:"이메일 또는 비밀번호가 올바르지 않습니다.",WEAK_PASSWORD:"비밀번호는 6자 이상이어야 합니다.",MISSING_EMAIL:"이메일을 입력해주세요.",INVALID_EMAIL:"올바른 이메일 형식이 아닙니다.",TOO_MANY_ATTEMPTS_TRY_LATER:"잠시 후 다시 시도해주세요."};
+const koErr=(m="")=>{for(const[k,v]of Object.entries(KO))if(m.toUpperCase().includes(k))return v;return"오류가 발생했습니다.";};
+async function fbPost(url,body){const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(koErr(d.error?.message));return d;}
+const fbSignUp=(k,e,p)=>fbPost(`${AUTH}:signUp?key=${k}`,{email:e,password:p,returnSecureToken:true});
+const fbSignIn=(k,e,p)=>fbPost(`${AUTH}:signInWithPassword?key=${k}`,{email:e,password:p,returnSecureToken:true});
+async function fbRefresh(k,rt){const r=await fetch(`${RTOK}?key=${k}`,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:`grant_type=refresh_token&refresh_token=${rt}`});const d=await r.json();if(!r.ok)throw new Error("토큰 갱신 실패");return{idToken:d.id_token,refreshToken:d.refresh_token,expiresAt:Date.now()+d.expires_in*1000};}
+async function dbRead(pid,uid,tok){const r=await fetch(`${rtdb(pid,uid)}?auth=${tok}`);if(!r.ok)throw new Error("읽기 실패");return r.json();}
+async function dbWrite(pid,uid,tok,notes){const obj={};notes.forEach(n=>{obj[n.id]=n;});await fetch(`${rtdb(pid,uid)}?auth=${tok}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(obj)});}
+
+/* ── Helpers ── */
+const STARTER=[{id:"doc-1",title:"주간 영업 회의",date:new Date().toISOString().slice(0,10),note:"# 회의 목적\n신규 영업 진행사항 공유\n\n# 핵심 메모\n- 관리소 FAX 발송 결과 점검\n- 군관사 일정 재확인\n- 대학가 현장 진행 상황 공유\n\n# 할 일\n- [ ] 다음 주 제안서 수정\n- [ ] 고객 응대 문구 정리\n\n# 담당자\n김대리: 현장 DB 업데이트\n이과장: 전단 문구 수정본 공유",recordings:[],tags:["회의","영업"],aiSummary:null,updatedAt:Date.now()}];
+const fmt=s=>`${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+const dlTxt=(name,txt)=>Object.assign(document.createElement("a"),{href:URL.createObjectURL(new Blob([txt],{type:"text/plain;charset=utf-8"})),download:name}).click();
+
+/* ── SVG Icons (inline) ── */
+const Icon=({d,size=20,color="currentColor",style:st})=><svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={st}><path d={d}/></svg>;
+const Ico={
+  layers:<Icon d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>,
+  search:<Icon d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0"/>,
+  plus:<Icon d="M12 5v14M5 12h14"/>,
+  refresh:<Icon d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>,
+  logout:<Icon d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>,
+  back:<Icon d="M15 18l-6-6 6-6"/>,
+  more:<Icon d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zM12 13a1 1 0 110-2 1 1 0 010 2zM12 20a1 1 0 110-2 1 1 0 010 2z"/>,
+  note:<Icon d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>,
+  eye:<Icon d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 100 6 3 3 0 000-6z"/>,
+  mic:<Icon d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3zM19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"/>,
+  stop:<Icon d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>,
+  sparkles:<Icon d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2 2-6z"/>,
+  chat:<Icon d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>,
+  send:<Icon d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>,
+  mail:<Icon d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22 6l-10 7L2 6"/>,
+  lock:<Icon d="M19 11H5a2 2 0 00-2 2v7a2 2 0 002 2h14a2 2 0 002-2v-7a2 2 0 00-2-2zM7 11V7a5 5 0 0110 0v4"/>,
+  user:<Icon d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 3a4 4 0 100 8 4 4 0 000-8z"/>,
+  alert:<Icon d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"/>,
+  shield:<Icon d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>,
+  check:<Icon d="M22 11.08V12a10 10 0 11-5.93-9.14M22 4L12 14.01l-3-3"/>,
+  download:<Icon d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>,
+  trash:<Icon d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/>,
+  tag:<Icon d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82zM7 7h.01"/>,
+  cal:<Icon d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z"/>,
+  x:<Icon d="M18 6L6 18M6 6l12 12"/>,
+  rotate:<Icon d="M1 4v6h6M23 20v-6h-6M20.49 9A9 9 0 005.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 013.51 15"/>,
+  arrow:<Icon d="M5 12h14M12 5l7 7-7 7"/>,
+  volume:<Icon d="M11 5L6 9H2v6h4l5 4V5zM15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14"/>,
+  settings:<Icon d="M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>,
+  cloud:<Icon d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/>,
+};
+const I=({n,size=20,color="currentColor",style:st})=>{
+  const el=Ico[n];if(!el)return null;
+  return React.cloneElement(el,{key:n,props:{...el.props,width:size,height:size,stroke:color,style:st}});
+};
+// simpler icon component
+function Ic({n,size=20,color="currentColor",st}){
+  const paths={
+    layers:"M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5",
+    search:"M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0",
+    plus:"M12 5v14M5 12h14",
+    refresh:"M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15",
+    logout:"M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9",
+    back:"M15 18l-6-6 6-6",
+    more:"M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zM12 13a1 1 0 110-2 1 1 0 010 2zM12 20a1 1 0 110-2 1 1 0 010 2z",
+    note:"M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7",
+    eye:"M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 100 6 3 3 0 000-6z",
+    mic:"M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3zM19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8",
+    stop:"M6 4h12v12H6z",
+    sparkles:"M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2 2-6z",
+    chat:"M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z",
+    send:"M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z",
+    mail:"M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22 6l-10 7L2 6",
+    lock:"M19 11H5a2 2 0 00-2 2v7a2 2 0 002 2h14a2 2 0 002-2v-7a2 2 0 00-2-2zM7 11V7a5 5 0 0110 0v4",
+    user:"M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 3a4 4 0 100 8 4 4 0 000-8z",
+    alert:"M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01",
+    shield:"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+    check:"M22 11.08V12a10 10 0 11-5.93-9.14M22 4L12 14.01l-3-3",
+    download:"M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3",
+    trash:"M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2",
+    tag:"M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82zM7 7h.01",
+    cal:"M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z",
+    x:"M18 6L6 18M6 6l12 12",
+    rotate:"M1 4v6h6M23 20v-6h-6M20.49 9A9 9 0 005.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 013.51 15",
+    arrow:"M5 12h14M12 5l7 7-7 7",
+    volume:"M11 5L6 9H2v6h4l5 4V5zM15.54 8.46a5 5 0 010 7.07",
+    settings:"M12 15a3 3 0 100-6 3 3 0 000 6z",
+    cloud:"M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z",
+    filetxt:"M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8",
+    checksq:"M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11",
+  };
+  return(
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={st}>
+      <path d={paths[n]||""}/>
+    </svg>
+  );
+}
+
+/* ── Markdown ── */
+function MD({text}){
+  return(
+    <div style={{lineHeight:1.9}}>
+      {(text||"").split("\n").map((line,i)=>{
+        if(line.startsWith("# "))   return <h1 key={i} style={{fontSize:20,fontWeight:700,color:"#111827",margin:"18px 0 5px",fontFamily:"'DM Serif Display',serif"}}>{line.slice(2)}</h1>;
+        if(line.startsWith("## "))  return <h2 key={i} style={{fontSize:16,fontWeight:600,color:"#374151",margin:"12px 0 3px"}}>{line.slice(3)}</h2>;
+        if(line.startsWith("- [x] "))return<div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"5px 0"}}><span style={{width:20,height:20,borderRadius:6,background:A,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><svg width="12" height="9" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="1.8" strokeLinecap="round"/></svg></span><span style={{color:"#9ca3af",textDecoration:"line-through",fontSize:15}}>{line.slice(6)}</span></div>;
+        if(line.startsWith("- [ ] "))return<div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"5px 0"}}><span style={{width:20,height:20,borderRadius:6,border:"2px solid #d1d5db",flexShrink:0}}/><span style={{color:"#374151",fontSize:15}}>{line.slice(6)}</span></div>;
+        if(line.startsWith("- "))   return<div key={i} style={{display:"flex",gap:10,padding:"3px 0"}}><span style={{width:6,height:6,borderRadius:"50%",background:A,flexShrink:0,marginTop:10}}/><span style={{color:"#374151",fontSize:15}}>{line.slice(2)}</span></div>;
+        if(!line)return<div key={i} style={{height:8}}/>;
+        return<p key={i} style={{color:"#374151",fontSize:15,margin:"2px 0"}}>{line}</p>;
+      })}
+    </div>
+  );
+}
+
+/* ── Claude AI ── */
+async function aiSummary(title,note){
+  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:`회의 노트를 분석해서 순수 JSON만 반환하세요(코드블록 없이):\n{"overview":"요약 2~3문장","bullets":["핵심1","핵심2","핵심3"],"todos":["할일1","할일2"],"decisions":["결정사항"],"nextSteps":["다음단계"],"sentiment":"긍정적|중립|논의중"}\n\n회의: ${title}\n${note}`}]})});
+  const d=await r.json();return JSON.parse(d.content[0].text.replace(/```json|```/g,"").trim());
+}
+async function aiChat(title,note,history,msg){
+  const messages=[{role:"user",content:`당신은 아래 회의 노트의 어시스턴트입니다. 한국어로만 답하세요.\n[회의: ${title}]\n${note}`},{role:"assistant",content:"확인했습니다. 무엇이 궁금하신가요?"},...history.flatMap(m=>[{role:"user",content:m.q},{role:"assistant",content:m.a}]),{role:"user",content:msg}];
+  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages})});
+  const d=await r.json();return d.content[0].text;
+}
+
+/* ══════════════ SETUP SCREEN ══════════════ */
+function SetupScreen({onSave}){
+  const[apiKey,setApiKey]=useState("");
+  const[pid,setPid]=useState("");
+  const[err,setErr]=useState("");
+  const save=()=>{if(!apiKey.trim()||!pid.trim())return setErr("두 항목 모두 입력해주세요.");onSave({apiKey:apiKey.trim(),projectId:pid.trim()});};
+  return(
+    <div style={{minHeight:"100dvh",background:"linear-gradient(160deg,#eef2ff,#f8fafc)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px 16px"}}>
+      <div style={{width:"100%",maxWidth:440,background:"#fff",borderRadius:24,padding:"36px 28px",boxShadow:"0 8px 48px rgba(79,70,229,.13)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:24}}>
+          <div style={{width:42,height:42,borderRadius:13,background:A,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic n="layers" size={20} color="#fff"/></div>
+          <div><div style={{fontSize:16,fontWeight:700,color:"#111827"}}>MeetingNotes</div><div style={{fontSize:11,color:"#9ca3af"}}>크로스 디바이스 회의 노트</div></div>
+        </div>
+        <div style={{fontSize:22,fontWeight:700,color:"#111827",fontFamily:"'DM Serif Display',serif",marginBottom:8}}>Firebase 연동 설정</div>
+        <div style={{fontSize:13,color:"#6b7280",lineHeight:1.75,marginBottom:16}}>아이패드·갤럭시 동기화를 위해 Firebase 정보를 입력하세요. <strong style={{color:A}}>무료 플랜</strong>으로 충분합니다.</div>
+        <div style={{background:"#f0fdf4",border:"1.5px solid #d1fae5",borderRadius:12,padding:"12px 14px",marginBottom:20,display:"flex",gap:10}}>
+          <Ic n="shield" size={15} color="#059669" st={{flexShrink:0,marginTop:1}}/>
+          <div style={{fontSize:12,color:"#065f46",lineHeight:1.7}}><strong>보안:</strong> 키는 이 기기 localStorage에만 저장됩니다. 소스코드에 노출되지 않습니다.</div>
+        </div>
+        <div style={{background:"#f8fafc",border:"1.5px solid #e5e7eb",borderRadius:12,padding:"13px 15px",marginBottom:20,fontSize:12,color:"#374151",lineHeight:1.85}}>
+          <div style={{fontWeight:700,color:"#111827",marginBottom:5}}>⚙️ Firebase에서 복사하는 위치</div>
+          <div>Firebase 콘솔 → ⚙️ 프로젝트 설정 → 내 앱(웹) → firebaseConfig</div>
+          <div style={{marginTop:3,color:"#6b7280"}}>apiKey 값 + projectId 값 복사</div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div><label style={{fontSize:13,fontWeight:600,color:"#374151",display:"block",marginBottom:6}}>Web API Key</label>
+            <input value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="AIzaSy..." style={{width:"100%",border:"1.5px solid #e5e7eb",borderRadius:12,padding:"13px 14px",fontSize:15,color:"#374151",background:"#fafafa"}}/></div>
+          <div><label style={{fontSize:13,fontWeight:600,color:"#374151",display:"block",marginBottom:6}}>Project ID</label>
+            <input value={pid} onChange={e=>setPid(e.target.value)} placeholder="meetingnotes-xxxxx" style={{width:"100%",border:"1.5px solid #e5e7eb",borderRadius:12,padding:"13px 14px",fontSize:15,color:"#374151",background:"#fafafa"}}/></div>
+          {err&&<div style={{fontSize:13,color:"#ef4444",display:"flex",gap:6,alignItems:"center"}}><Ic n="alert" size={14} color="#ef4444"/>{err}</div>}
+          <button onClick={save} style={{background:A,color:"#fff",border:"none",borderRadius:13,padding:"15px",fontSize:16,fontWeight:700,cursor:"pointer",marginTop:4,boxShadow:"0 4px 14px rgba(79,70,229,.3)"}}>저장하고 시작하기 →</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════ AUTH SCREEN ══════════════ */
+function AuthScreen({config,onAuth,onEditConfig}){
+  const[mode,setMode]=useState("login");
+  const[email,setEmail]=useState("");
+  const[pw,setPw]=useState("");
+  const[loading,setLoading]=useState(false);
+  const[err,setErr]=useState("");
+  const handle=async()=>{setErr("");setLoading(true);try{const fn=mode==="login"?fbSignIn:fbSignUp;const d=await fn(config.apiKey,email,pw);onAuth({uid:d.localId,idToken:d.idToken,refreshToken:d.refreshToken,email:d.email,expiresAt:Date.now()+d.expiresIn*1000});}catch(e){setErr(e.message);}finally{setLoading(false);}};
+  return(
+    <div style={{minHeight:"100dvh",background:"linear-gradient(160deg,#eef2ff,#f8fafc)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px 16px"}}>
+      <div style={{width:"100%",maxWidth:400,background:"#fff",borderRadius:24,padding:"36px 28px",boxShadow:"0 8px 48px rgba(79,70,229,.13)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:32}}>
+          <div style={{width:44,height:44,borderRadius:14,background:A,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic n="layers" size={22} color="#fff"/></div>
+          <div><div style={{fontSize:17,fontWeight:700,color:"#111827"}}>MeetingNotes</div><div style={{fontSize:12,color:"#9ca3af"}}>아이패드 · 갤럭시 동기화</div></div>
+        </div>
+        <div style={{fontSize:26,fontWeight:700,color:"#111827",fontFamily:"'DM Serif Display',serif",marginBottom:6}}>{mode==="login"?"로그인":"회원가입"}</div>
+        <div style={{fontSize:14,color:"#9ca3af",marginBottom:28,lineHeight:1.6}}>{mode==="login"?"같은 계정으로 어느 기기에서든 이어서 사용하세요.":"계정을 만들고 모든 기기에서 동기화를 시작하세요."}</div>
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          <div style={{position:"relative"}}><Ic n="mail" size={16} color="#9ca3af" st={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)"}}/><input type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()} placeholder="이메일" style={{width:"100%",border:"1.5px solid #e5e7eb",borderRadius:13,padding:"14px 14px 14px 42px",fontSize:15,color:"#374151",background:"#fafafa"}}/></div>
+          <div style={{position:"relative"}}><Ic n="lock" size={16} color="#9ca3af" st={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)"}}/><input type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()} placeholder="비밀번호 (6자 이상)" style={{width:"100%",border:"1.5px solid #e5e7eb",borderRadius:13,padding:"14px 14px 14px 42px",fontSize:15,color:"#374151",background:"#fafafa"}}/></div>
+          {err&&<div style={{fontSize:13,color:"#ef4444",background:"#fff5f5",border:"1px solid #fecaca",borderRadius:10,padding:"11px 14px",display:"flex",gap:8,alignItems:"center"}}><Ic n="alert" size={14} color="#ef4444"/>{err}</div>}
+          <button onClick={handle} disabled={loading} style={{background:A,color:"#fff",border:"none",borderRadius:13,padding:"15px",fontSize:16,fontWeight:700,cursor:loading?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:loading?.7:1,boxShadow:"0 4px 14px rgba(79,70,229,.28)",marginTop:4}}>
+            {loading?<><span class="spin" style={{display:"inline-block"}}>↻</span>처리 중...</>:(mode==="login"?"로그인":"계정 만들기")}
+          </button>
+          <button onClick={()=>{setMode(m=>m==="login"?"signup":"login");setErr("");}} style={{background:"none",border:"none",color:A,fontSize:14,cursor:"pointer",padding:"4px 0"}}>{mode==="login"?"계정이 없으신가요? 회원가입":"이미 계정이 있으신가요? 로그인"}</button>
+          <button onClick={onEditConfig} style={{background:"none",border:"none",color:"#9ca3af",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:5}}><Ic n="settings" size={12} color="#9ca3af"/>Firebase 설정 변경</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════ MAIN APP ══════════════ */
+function App(){
+  const[config,setConfig]=useState(()=>ls("mn-cfg"));
+  const[auth,setAuth]=useState(()=>ls("mn-auth"));
+  useEffect(()=>{ls("mn-cfg",config);},[config]);
+  useEffect(()=>{ls("mn-auth",auth);},[auth]);
+
+  const[docs,setDocs]=useState(STARTER);
+  const[selId,setSelId]=useState(STARTER[0].id);
+  const[query,setQuery]=useState("");
+  const[screen,setScreen]=useState("list");
+  const[tab,setTab]=useState("note");
+  const[syncSt,setSyncSt]=useState("synced");
+  const[lastSync,setLastSync]=useState(null);
+  const saveTimer=useRef(null);
+  const[isRec,setIsRec]=useState(false);
+  const[elapsed,setElapsed]=useState(0);
+  const[audioUrl,setAudioUrl]=useState("");
+  const recRef=useRef(null);const timerRef=useRef(null);const chunkRef=useRef([]);
+  const[sumLoad,setSumLoad]=useState(false);
+  const[sumErr,setSumErr]=useState("");
+  const[chat,setChat]=useState([]);
+  const[chatIn,setChatIn]=useState("");
+  const[chatLoad,setChatLoad]=useState(false);
+  const chatEnd=useRef(null);
+  const[tagIn,setTagIn]=useState("");
+  const[showTag,setShowTag]=useState(false);
+  const[showMenu,setShowMenu]=useState(false);
+
+  useEffect(()=>{chatEnd.current?.scrollIntoView({behavior:"smooth"});},[chat]);
+  useEffect(()=>{setChat([]);setSumErr("");},[selId]);
+
+  const getToken=useCallback(async()=>{
+    if(!auth||!config)return null;
+    if(Date.now()<auth.expiresAt-60000)return auth.idToken;
+    try{const f=await fbRefresh(config.apiKey,auth.refreshToken);const next={...auth,...f};setAuth(next);return next.idToken;}
+    catch{setAuth(null);return null;}
+  },[auth,config]);
+
+  useEffect(()=>{
+    if(!auth||!config)return;
+    (async()=>{setSyncSt("syncing");try{const tok=await getToken();const remote=await dbRead(config.projectId,auth.uid,tok);if(remote&&typeof remote==="object"){const arr=Object.values(remote).sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));if(arr.length){setDocs(arr);setSelId(arr[0].id);}}else{await dbWrite(config.projectId,auth.uid,tok,STARTER);}setSyncSt("synced");setLastSync(new Date().toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}));}catch{setSyncSt("error");}})();
+  },[auth?.uid]);
+
+  const saveToDB=useCallback((updated)=>{
+    if(!auth||!config)return;clearTimeout(saveTimer.current);setSyncSt("syncing");
+    saveTimer.current=setTimeout(async()=>{try{const tok=await getToken();if(!tok)return;await dbWrite(config.projectId,auth.uid,tok,updated);setSyncSt("synced");setLastSync(new Date().toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}));}catch{setSyncSt("error");}},2000);
+  },[auth,config,getToken]);
+
+  const manualSync=async()=>{if(!auth||!config)return;setSyncSt("syncing");try{const tok=await getToken();const remote=await dbRead(config.projectId,auth.uid,tok);if(remote&&typeof remote==="object"){const arr=Object.values(remote).sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));if(arr.length)setDocs(arr);}setSyncSt("synced");setLastSync(new Date().toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}));}catch{setSyncSt("error");}};
+
+  const doc=useMemo(()=>docs.find(d=>d.id===selId)||docs[0],[docs,selId]);
+  const filtered=useMemo(()=>{const q=query.toLowerCase();return q?docs.filter(d=>d.title.toLowerCase().includes(q)||d.note.toLowerCase().includes(q)||d.tags?.some(t=>t.toLowerCase().includes(q))):docs;},[docs,query]);
+  const wordCount=useMemo(()=>(doc?.note||"").trim().split(/\s+/).filter(Boolean).length,[doc]);
+  const upd=patch=>setDocs(prev=>{const next=prev.map(d=>d.id===selId?{...d,...patch,updatedAt:Date.now()}:d);saveToDB(next);return next;});
+  const newDoc=()=>{const n={id:`d-${Date.now()}`,title:"새 회의",date:new Date().toISOString().slice(0,10),note:"# 새 회의\n\n- [ ] 할 일 추가",recordings:[],tags:[],aiSummary:null,updatedAt:Date.now()};setDocs(p=>{const next=[n,...p];saveToDB(next);return next;});setSelId(n.id);setTab("note");setScreen("detail");};
+  const delDoc=()=>{const next=docs.filter(d=>d.id!==doc?.id);setDocs(next);saveToDB(next);setSelId(next[0]?.id||null);setScreen("list");setShowMenu(false);};
+  const addTag=()=>{if(!tagIn.trim())return;upd({tags:[...(doc?.tags||[]),tagIn.trim()]});setTagIn("");setShowTag(false);};
+  const startRec=async()=>{try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});const mr=new MediaRecorder(stream);chunkRef.current=[];setElapsed(0);setAudioUrl("");mr.ondataavailable=e=>{if(e.data.size>0)chunkRef.current.push(e.data);};mr.onstop=()=>{stream.getTracks().forEach(t=>t.stop());setAudioUrl(URL.createObjectURL(new Blob(chunkRef.current,{type:"audio/webm"})));upd({recordings:[{id:`r-${Date.now()}`,name:`${doc?.title} 녹음`,time:fmt(elapsed),at:new Date().toLocaleString("ko-KR")},...(doc?.recordings||[])]});};recRef.current=mr;mr.start();setIsRec(true);timerRef.current=setInterval(()=>setElapsed(p=>p+1),1000);}catch{alert("마이크 권한이 필요합니다.");}};
+  const stopRec=()=>{recRef.current?.stop();setIsRec(false);clearInterval(timerRef.current);};
+  const genSummary=async()=>{if(!doc)return;setSumLoad(true);setSumErr("");try{upd({aiSummary:await aiSummary(doc.title,doc.note)});}catch(e){setSumErr(e.message||"오류");}finally{setSumLoad(false);}};
+  const sendChat=async()=>{if(!chatIn.trim()||chatLoad)return;const q=chatIn.trim();setChatIn("");setChatLoad(true);try{const a=await aiChat(doc?.title,doc?.note,chat,q);setChat(p=>[...p,{q,a}]);}catch{setChat(p=>[...p,{q,a:"오류가 발생했습니다."}]);}finally{setChatLoad(false);}};
+  const exportDoc=()=>{if(!doc)return;const s=doc.aiSummary;dlTxt(`${doc.title}.txt`,[`■ ${doc.title}`,`날짜: ${doc.date}  태그: ${doc.tags?.join(", ")}`,"",s?`[AI 요약]\n${s.overview}\n\n[핵심]\n${s.bullets?.map(b=>`• ${b}`).join("\n")}\n\n[할 일]\n${s.todos?.map(t=>`☐ ${t}`).join("\n")}`:"[요약 없음]","","[원문]",doc.note].join("\n"));};
+
+  const syncColor={synced:"#059669",syncing:"#f59e0b",error:"#ef4444"}[syncSt]||"#9ca3af";
+  const syncLabel={synced:"저장됨",syncing:"저장 중...",error:"동기화 오류"}[syncSt]||"오프라인";
+
+  const TABS=[{id:"note",n:"note",label:"노트"},{id:"preview",n:"eye",label:"미리보기"},{id:"record",n:"mic",label:"녹음"},{id:"summary",n:"sparkles",label:"AI요약"},{id:"chat",n:"chat",label:"AI대화"}];
+
+  if(!config)return <SetupScreen onSave={cfg=>setConfig(cfg)}/>;
+  if(!auth)  return <AuthScreen config={config} onAuth={a=>setAuth(a)} onEditConfig={()=>setConfig(null)}/>;
+
+  const IST="calc(env(safe-area-inset-top,0px) + 14px)";
+  const ISB="env(safe-area-inset-bottom,0px)";
+
+  return(
+    <div style={{position:"relative",height:"100dvh",overflow:"hidden",maxWidth:680,margin:"0 auto",background:"#fff"}}>
+
+      {/* LIST */}
+      {screen==="list"&&(
+        <div className="screen">
+          <div style={{padding:`${IST} 16px 0`,flexShrink:0}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:34,height:34,borderRadius:10,background:A,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic n="layers" size={17} color="#fff"/></div>
+                <div>
+                  <div style={{fontSize:16,fontWeight:700,color:"#111827"}}>MeetingNotes</div>
+                  <div style={{display:"flex",alignItems:"center",gap:4}}><span style={{color:syncColor}}>●</span><span style={{fontSize:11,color:syncColor}}>{lastSync?lastSync+" 동기화":syncLabel}</span></div>
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={manualSync} style={{background:AL,border:"none",borderRadius:10,padding:"9px",cursor:"pointer",display:"flex"}}><Ic n="refresh" size={17} color={A}/></button>
+                <button onClick={()=>setAuth(null)} style={{background:"#fff5f5",border:"none",borderRadius:10,padding:"9px",cursor:"pointer",display:"flex"}}><Ic n="logout" size={17} color="#ef4444"/></button>
+              </div>
+            </div>
+            <div style={{position:"relative",marginBottom:14}}>
+              <Ic n="search" size={16} color="#9ca3af" st={{position:"absolute",left:13,top:"50%",transform:"translateY(-50%)"}}/>
+              <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="노트 검색..." style={{width:"100%",paddingLeft:40,border:"1.5px solid #e5e7eb",borderRadius:14,padding:"12px 14px 12px 40px",fontSize:15,color:"#374151",background:"#f9fafb"}}/>
+            </div>
+          </div>
+
+          <div style={{flex:1,overflowY:"auto",padding:"0 12px"}}>
+            {filtered.map((d,i)=>(
+              <div key={d.id} onClick={()=>{setSelId(d.id);setTab("note");setScreen("detail");}}
+                style={{background:selId===d.id?AL:"#fff",border:`1.5px solid ${selId===d.id?"#c7d2fe":"#f1f5f9"}`,borderRadius:16,padding:"15px 16px",marginBottom:8,cursor:"pointer",animation:`fadeUp .2s ease ${i*0.04}s both`}}>
+                <div style={{fontSize:16,fontWeight:600,color:selId===d.id?A:"#1f2937",marginBottom:4}}>{d.title}</div>
+                <div style={{fontSize:12,color:"#9ca3af",display:"flex",alignItems:"center",gap:5,marginBottom:d.tags?.length?8:0}}>
+                  <Ic n="cal" size={12} color="#9ca3af"/>{d.date}
+                  {d.aiSummary&&<><span style={{color:"#d1d5db"}}>·</span><span style={{color:"#10b981",fontSize:11}}>✦ AI요약</span></>}
+                </div>
+                {d.tags?.length>0&&<div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:6}}>{d.tags.slice(0,4).map(t=><span key={t} style={{fontSize:11,background:selId===d.id?"#e0e7ff":"#f3f4f6",color:selId===d.id?A:"#6b7280",borderRadius:6,padding:"2px 8px"}}>{t}</span>)}</div>}
+                <div style={{fontSize:12,color:"#c4c4d4",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.note.replace(/#+ |^- \[.\] |^- /gm,"").split("\n").filter(Boolean)[0]||""}</div>
+              </div>
+            ))}
+            {!filtered.length&&<div style={{textAlign:"center",padding:"48px 0",color:"#9ca3af",fontSize:14}}>검색 결과 없음</div>}
+            <div style={{height:100}}/>
+          </div>
+
+          <button onClick={newDoc} style={{position:"fixed",bottom:`calc(24px + ${ISB})`,right:"calc(50% - 300px + 16px)",background:A,color:"#fff",border:"none",borderRadius:20,padding:"15px 22px",fontSize:15,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:8,boxShadow:"0 4px 24px rgba(79,70,229,.45)",zIndex:100}}>
+            <Ic n="plus" size={20} color="#fff"/>새 회의
+          </button>
+        </div>
+      )}
+
+      {/* DETAIL */}
+      {screen==="detail"&&(
+        <div className="screen screen-enter" style={{display:"flex",flexDirection:"column"}}>
+          {/* 헤더 */}
+          <div style={{padding:`${IST} 16px 0`,borderBottom:"1px solid #f1f5f9",flexShrink:0,background:"#fff"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+              <button onClick={()=>setScreen("list")} style={{background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:4,color:A,fontSize:15,fontWeight:600,padding:"4px 0"}}>
+                <Ic n="back" size={20} color={A}/>목록
+              </button>
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                <div style={{background:`${syncColor}15`,borderRadius:20,padding:"5px 10px",display:"flex",alignItems:"center",gap:4}}>
+                  <span style={{color:syncColor,fontSize:12}}>●</span>
+                  <span style={{fontSize:11,color:syncColor,fontWeight:500}}>{syncLabel}</span>
+                </div>
+                <div style={{position:"relative"}}>
+                  <button onClick={()=>setShowMenu(p=>!p)} style={{background:"#f9fafb",border:"1.5px solid #f1f5f9",borderRadius:10,padding:"7px 9px",cursor:"pointer",display:"flex"}}><Ic n="more" size={18} color="#6b7280"/></button>
+                  {showMenu&&(
+                    <div style={{position:"absolute",right:0,top:"calc(100% + 6px)",background:"#fff",border:"1.5px solid #f1f5f9",borderRadius:14,boxShadow:"0 8px 32px rgba(0,0,0,.1)",zIndex:200,width:180,overflow:"hidden"}}>
+                      <button onClick={exportDoc} style={{width:"100%",textAlign:"left",padding:"13px 16px",border:"none",background:"none",cursor:"pointer",fontSize:14,color:"#374151",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #f9fafb"}}><Ic n="download" size={15} color="#059669"/>내보내기</button>
+                      <button onClick={manualSync} style={{width:"100%",textAlign:"left",padding:"13px 16px",border:"none",background:"none",cursor:"pointer",fontSize:14,color:"#374151",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #f9fafb"}}><Ic n="refresh" size={15} color={A}/>동기화</button>
+                      <button onClick={delDoc} style={{width:"100%",textAlign:"left",padding:"13px 16px",border:"none",background:"none",cursor:"pointer",fontSize:14,color:"#ef4444",display:"flex",alignItems:"center",gap:10}}><Ic n="trash" size={15} color="#ef4444"/>삭제</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <input value={doc?.title||""} onChange={e=>upd({title:e.target.value})} style={{width:"100%",border:"none",fontSize:22,fontWeight:700,color:"#111827",fontFamily:"'DM Serif Display',serif",background:"transparent",padding:"0 0 4px",letterSpacing:-.5,outline:"none"}}/>
+            <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",paddingBottom:10}}>
+              <span style={{fontSize:12,color:"#9ca3af",display:"flex",alignItems:"center",gap:3}}><Ic n="cal" size={11} color="#9ca3af"/>{doc?.date}</span>
+              <span style={{color:"#d1d5db"}}>·</span>
+              <span style={{fontSize:12,color:"#9ca3af"}}>{wordCount}단어</span>
+              {doc?.tags?.map(tag=>(
+                <span key={tag} style={{fontSize:11,background:AL,color:A,borderRadius:6,padding:"2px 8px",display:"inline-flex",alignItems:"center",gap:4,border:"1px solid #c7d2fe"}}>
+                  {tag}<button onClick={()=>upd({tags:doc.tags.filter(t=>t!==tag)})} style={{background:"none",border:"none",cursor:"pointer",color:A,padding:0,display:"flex"}}><Ic n="x" size={10} color={A}/></button>
+                </span>
+              ))}
+              {showTag?<input autoFocus value={tagIn} onChange={e=>setTagIn(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addTag();if(e.key==="Escape")setShowTag(false);}} placeholder="태그명" style={{fontSize:12,border:"1.5px solid #c7d2fe",borderRadius:7,padding:"3px 9px",width:80,color:"#374151",background:AL}}/>:<button onClick={()=>setShowTag(true)} style={{fontSize:11,color:"#9ca3af",background:"#f9fafb",border:"1px dashed #d1d5db",borderRadius:6,padding:"3px 9px",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:3}}><Ic n="tag" size={10} color="#9ca3af"/>태그</button>}
+            </div>
+          </div>
+
+          {/* 탭 콘텐츠 */}
+          <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+
+            {tab==="note"&&doc&&(
+              <textarea value={doc.note} onChange={e=>upd({note:e.target.value})} placeholder={"# 회의 제목\n\n- [ ] 체크리스트\n- 일반 메모"} style={{flex:1,border:"none",padding:"16px",fontSize:15,lineHeight:1.9,color:"#374151",resize:"none",fontFamily:"'Noto Sans KR',monospace",background:"#fff",outline:"none",height:"100%"}}/>
+            )}
+
+            {tab==="preview"&&doc&&(
+              <div style={{flex:1,overflowY:"auto",padding:"16px"}}><MD text={doc.note}/><div style={{height:80}}/></div>
+            )}
+
+            {tab==="record"&&(
+              <div style={{flex:1,overflowY:"auto",padding:16,display:"flex",flexDirection:"column",gap:14}}>
+                <div style={{border:`2px solid ${isRec?"#fecaca":"#e5e7eb"}`,borderRadius:20,padding:"36px 20px",textAlign:"center",background:isRec?"#fff5f5":"#f9fafb",transition:"all .3s"}}>
+                  <div style={{width:88,height:88,borderRadius:"50%",background:isRec?"#fee2e2":AL,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px",animation:isRec?"recPulse 1.5s infinite":"none"}}>
+                    <Ic n={isRec?"mic":"volume"} size={36} color={isRec?"#ef4444":A}/>
+                  </div>
+                  <div style={{fontSize:44,fontWeight:700,color:isRec?"#ef4444":"#111827",fontVariantNumeric:"tabular-nums",letterSpacing:3,marginBottom:6}}>{fmt(elapsed)}</div>
+                  <div style={{fontSize:14,color:"#9ca3af",marginBottom:24}}>{isRec?"🔴 녹음 진행 중...":"녹음 준비 완료"}</div>
+                  {!isRec?<button onClick={startRec} style={{background:A,color:"#fff",border:"none",borderRadius:16,padding:"15px 36px",fontSize:16,fontWeight:700,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:8,boxShadow:"0 4px 14px rgba(79,70,229,.3)"}}><Ic n="mic" size={18} color="#fff"/>녹음 시작</button>:<button onClick={stopRec} style={{background:"#ef4444",color:"#fff",border:"none",borderRadius:16,padding:"15px 36px",fontSize:16,fontWeight:700,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:8}}><Ic n="stop" size={18} color="#fff"/>녹음 종료</button>}
+                </div>
+                {audioUrl&&<div style={{border:"1.5px solid #e5e7eb",borderRadius:14,padding:16}}><div style={{fontSize:13,fontWeight:600,color:"#374151",marginBottom:10}}>방금 녹음</div><audio controls src={audioUrl} style={{width:"100%",accentColor:A}}/></div>}
+                {(doc?.recordings||[]).map(r=><div key={r.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",border:"1.5px solid #f1f5f9",borderRadius:14,padding:"14px 16px",background:"#fafafa"}}><div><div style={{fontSize:14,fontWeight:600,color:"#374151"}}>{r.name}</div><div style={{fontSize:12,color:"#9ca3af",marginTop:3}}>{r.at} · {r.time}</div></div><span style={{fontSize:11,background:"#d1fae5",color:"#065f46",borderRadius:7,padding:"4px 10px",fontWeight:600}}>저장됨</span></div>)}
+                <div style={{height:80}}/>
+              </div>
+            )}
+
+            {tab==="summary"&&(
+              <div style={{flex:1,overflowY:"auto",padding:16,display:"flex",flexDirection:"column",gap:14}}>
+                {!doc?.aiSummary?(
+                  <div style={{border:"2px dashed #c7d2fe",borderRadius:20,padding:"48px 24px",textAlign:"center",background:AL}}>
+                    <div style={{width:60,height:60,borderRadius:18,background:A,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px"}}><Ic n="sparkles" size={28} color="#fff"/></div>
+                    <div style={{fontSize:20,fontWeight:700,color:"#111827",fontFamily:"'DM Serif Display',serif",marginBottom:8}}>Claude AI 요약</div>
+                    <div style={{fontSize:14,color:"#6b7280",lineHeight:1.8,marginBottom:28}}>핵심 내용 · 할 일 · 결정사항 · 다음 단계를<br/>자동으로 구조화합니다.</div>
+                    <button onClick={genSummary} disabled={sumLoad} style={{background:A,color:"#fff",border:"none",borderRadius:16,padding:"15px 36px",fontSize:16,fontWeight:700,cursor:sumLoad?"not-allowed":"pointer",display:"inline-flex",alignItems:"center",gap:8,opacity:sumLoad?.7:1,boxShadow:"0 4px 14px rgba(79,70,229,.3)"}}>
+                      {sumLoad?<><span className="spin" style={{fontSize:18}}>↻</span>분석 중...</>:<><Ic n="sparkles" size={16} color="#fff"/>AI 요약 생성</>}
+                    </button>
+                    {sumErr&&<div style={{marginTop:16,color:"#ef4444",fontSize:14}}>⚠ {sumErr}</div>}
+                  </div>
+                ):(
+                  <div className="fadeUp" style={{display:"flex",flexDirection:"column",gap:14}}>
+                    <div style={{background:`linear-gradient(135deg,${A},#7c3aed)`,borderRadius:18,padding:"20px"}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.6)",letterSpacing:1.5,marginBottom:10}}>AI 요약</div>
+                      <div style={{fontSize:15,color:"#fff",lineHeight:1.8}}>{doc.aiSummary.overview}</div>
+                      {doc.aiSummary.sentiment&&<div style={{marginTop:12,display:"inline-block",fontSize:12,background:"rgba(255,255,255,.15)",color:"#fff",borderRadius:20,padding:"4px 12px"}}>분위기: {doc.aiSummary.sentiment}</div>}
+                    </div>
+                    <div style={{border:"1.5px solid #e5e7eb",borderRadius:16,padding:16}}>
+                      <div style={{fontSize:13,fontWeight:700,color:"#6b7280",marginBottom:12,display:"flex",alignItems:"center",gap:6}}><Ic n="filetxt" size={13} color={A}/>핵심 내용</div>
+                      {doc.aiSummary.bullets?.map((b,i)=><div key={i} style={{fontSize:14,color:"#374151",padding:"7px 0",borderBottom:"1px solid #f9fafb",display:"flex",gap:8}}><span style={{width:6,height:6,borderRadius:"50%",background:A,flexShrink:0,marginTop:7}}/>{b}</div>)}
+                    </div>
+                    <div style={{border:"1.5px solid #e5e7eb",borderRadius:16,padding:16}}>
+                      <div style={{fontSize:13,fontWeight:700,color:"#6b7280",marginBottom:12,display:"flex",alignItems:"center",gap:6}}><Ic n="checksq" size={13} color={A}/>할 일</div>
+                      {doc.aiSummary.todos?.map((t,i)=><div key={i} style={{fontSize:14,color:"#374151",padding:"7px 0",borderBottom:"1px solid #f9fafb",display:"flex",gap:8,alignItems:"flex-start"}}><span style={{width:18,height:18,border:`2px solid ${A}`,borderRadius:5,flexShrink:0,marginTop:1}}/>{t}</div>)}
+                      {!doc.aiSummary.todos?.length&&<div style={{fontSize:13,color:"#9ca3af"}}>할 일 없음</div>}
+                    </div>
+                    {doc.aiSummary.decisions?.filter(Boolean).length>0&&<div style={{border:"1.5px solid #d1fae5",borderRadius:16,padding:16,background:"#f0fdf4"}}><div style={{fontSize:13,fontWeight:700,color:"#065f46",marginBottom:10}}>✅ 결정사항</div>{doc.aiSummary.decisions.map((d,i)=><div key={i} style={{fontSize:14,color:"#374151",padding:"3px 0"}}>• {d}</div>)}</div>}
+                    {doc.aiSummary.nextSteps?.filter(Boolean).length>0&&<div style={{border:"1.5px solid #fde68a",borderRadius:16,padding:16,background:"#fffbeb"}}><div style={{fontSize:13,fontWeight:700,color:"#92400e",marginBottom:10}}>⚡ 다음 단계</div>{doc.aiSummary.nextSteps.map((s,i)=><div key={i} style={{fontSize:14,color:"#374151",display:"flex",gap:8,alignItems:"center",padding:"3px 0"}}><Ic n="arrow" size={13} color="#f59e0b"/>{s}</div>)}</div>}
+                    <button onClick={genSummary} disabled={sumLoad} style={{alignSelf:"flex-start",display:"flex",alignItems:"center",gap:6,border:"1.5px solid #e5e7eb",borderRadius:10,padding:"10px 16px",background:"#fff",color:"#6b7280",fontSize:13,cursor:"pointer"}}><Ic n="rotate" size={13} color="#6b7280"/>다시 생성</button>
+                    <div style={{height:80}}/>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {tab==="chat"&&(
+              <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+                <div style={{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:12}}>
+                  <div style={{background:AL,border:`1px solid #c7d2fe`,borderRadius:14,padding:"12px 14px",fontSize:14,color:A,display:"flex",gap:8}}><Ic n="sparkles" size={16} color={A} st={{flexShrink:0,marginTop:1}}/><span>이 회의 노트에 대해 자유롭게 질문하세요.</span></div>
+                  {chat.map((m,i)=>(
+                    <div key={i} style={{display:"flex",flexDirection:"column",gap:8}}>
+                      <div style={{display:"flex",justifyContent:"flex-end"}}><div style={{maxWidth:"80%",background:A,color:"#fff",borderRadius:"18px 18px 4px 18px",padding:"12px 16px",fontSize:14,lineHeight:1.7}}>{m.q}</div></div>
+                      {m.a&&<div style={{display:"flex",gap:8}}><div style={{width:30,height:30,borderRadius:10,background:AL,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:2}}><Ic n="sparkles" size={14} color={A}/></div><div style={{maxWidth:"80%",background:"#f9fafb",border:"1.5px solid #f1f5f9",borderRadius:"18px 18px 18px 4px",padding:"12px 16px",fontSize:14,color:"#374151",lineHeight:1.8}}>{m.a}</div></div>}
+                    </div>
+                  ))}
+                  {chatLoad&&<div style={{display:"flex",alignItems:"center",gap:8,color:"#9ca3af",fontSize:13,paddingLeft:38}}><span className="spin" style={{fontSize:16}}>↻</span>답변 생성 중...</div>}
+                  <div ref={chatEnd}/><div style={{height:10}}/>
+                </div>
+                <div style={{padding:`10px 12px calc(10px + ${ISB})`,borderTop:"1px solid #f1f5f9",display:"flex",gap:8,background:"#fff"}}>
+                  <input value={chatIn} onChange={e=>setChatIn(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey)sendChat();}} placeholder="질문하세요..." style={{flex:1,border:"1.5px solid #e5e7eb",borderRadius:14,padding:"12px 16px",fontSize:15,color:"#374151",background:"#fafafa"}}/>
+                  <button onClick={sendChat} disabled={!chatIn.trim()||chatLoad} style={{background:A,color:"#fff",border:"none",borderRadius:14,padding:"0 18px",cursor:!chatIn.trim()||chatLoad?"not-allowed":"pointer",opacity:!chatIn.trim()||chatLoad?.5:1,display:"flex",alignItems:"center",minWidth:52}}><Ic n="send" size={18} color="#fff"/></button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 하단 탭바 */}
+          {tab!=="chat"&&(
+            <div style={{borderTop:"1px solid #f1f5f9",background:"#fff",flexShrink:0,paddingBottom:ISB}}>
+              <div style={{display:"flex"}}>
+                {TABS.map(t=>(
+                  <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3,padding:"10px 4px",border:"none",background:"none",cursor:"pointer",borderTop:`2.5px solid ${tab===t.id?A:"transparent"}`}}>
+                    <Ic n={t.n} size={21} color={tab===t.id?A:"#9ca3af"}/>
+                    <span style={{fontSize:10,color:tab===t.id?A:"#9ca3af",fontWeight:tab===t.id?600:400}}>{t.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {showMenu&&<div onClick={()=>setShowMenu(false)} style={{position:"fixed",inset:0,zIndex:150}}/>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+
+/* ── PWA Service Worker ── */
+if("serviceWorker" in navigator){
+  window.addEventListener("load",()=>{
+    navigator.serviceWorker.register("/sw.js").catch(()=>{});
+  });
+}
+</script>
+</body>
+</html>
