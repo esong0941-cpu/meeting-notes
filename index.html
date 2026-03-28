@@ -134,6 +134,12 @@ function Ic({n,size=20,color="currentColor",st}){
     cloud:"M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z",
     filetxt:"M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8",
     checksq:"M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11",
+    pen:"M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z",
+    eraser:"M20.707 5.826l-3.535-3.533a1 1 0 00-1.408-.006L7.096 10.82a1 1 0 00-.295.707v3.976l-1.6 1.6a1 1 0 000 1.413l1.06 1.061a1 1 0 001.415 0l1.6-1.6h3.976a1 1 0 00.708-.295l8.532-8.669a1 1 0 00-.005-1.407z",
+    highlight:"M9.5 14.5L3 21M5 10l9 9 4-4-9-9-4 4zM14.5 5.5l4 4",
+    undo2:"M3 10h10a8 8 0 010 16H3M3 10l4-4M3 10l4 4",
+    trash2:"M3 6h18M8 6V4h8v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6",
+    image:"M21 19V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2zM8.5 10a1.5 1.5 0 100-3 1.5 1.5 0 000 3zM21 15l-5-5L5 21",
   };
   return(
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={st}>
@@ -160,13 +166,221 @@ function MD({text}){
 }
 
 /* ── Claude AI ── */
-async function aiSummary(title,note){
-  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:`회의 노트를 분석해서 순수 JSON만 반환하세요(코드블록 없이):\n{"overview":"요약 2~3문장","bullets":["핵심1","핵심2","핵심3"],"todos":["할일1","할일2"],"decisions":["결정사항"],"nextSteps":["다음단계"],"sentiment":"긍정적|중립|논의중"}\n\n회의: ${title}\n${note}`}]})});
+
+/* ══════════════ 손글씨 CANVAS ══════════════ */
+function HandwritingCanvas({docId, onSave}){
+  const canvasRef = useRef(null);
+  const [tool, setTool] = useState("pen");
+  const [color, setColor] = useState("#1e1e2e");
+  const [lineWidth, setLineWidth] = useState(3);
+  const [history, setHistory] = useState([]);
+  const [redoStack, setRedoStack] = useState([]);
+  const drawing = useRef(false);
+  const lastPos = useRef(null);
+  const storageKey = `mn-canvas-${docId}`;
+
+  useEffect(()=>{
+    const canvas = canvasRef.current;
+    if(!canvas) return;
+    const saved = ls(storageKey);
+    if(saved){
+      const img = new Image();
+      img.onload = ()=> canvas.getContext("2d").drawImage(img, 0, 0);
+      img.src = saved;
+    }
+    resize();
+  },[docId]);
+
+  const resize = ()=>{
+    const canvas = canvasRef.current;
+    if(!canvas) return;
+    const data = canvas.toDataURL();
+    canvas.width = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+    const img = new Image();
+    img.onload = ()=> canvas.getContext("2d").drawImage(img, 0, 0);
+    img.src = data;
+  };
+
+  const saveSnapshot = ()=>{
+    const canvas = canvasRef.current;
+    if(!canvas) return;
+    const snap = canvas.toDataURL();
+    setHistory(h=>[...h.slice(-19), snap]);
+    setRedoStack([]);
+    ls(storageKey, snap);
+    onSave && onSave(snap);
+  };
+
+  const getPos = (e)=>{
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const src = e.touches ? e.touches[0] : e;
+    return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+  };
+
+  const startDraw = (e)=>{
+    e.preventDefault();
+    drawing.current = true;
+    const pos = getPos(e);
+    lastPos.current = pos;
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
+  };
+
+  const draw = (e)=>{
+    e.preventDefault();
+    if(!drawing.current) return;
+    const ctx = canvasRef.current.getContext("2d");
+    const pos = getPos(e);
+    
+    if(tool === "eraser"){
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.lineWidth = lineWidth * 6;
+    } else if(tool === "highlight"){
+      ctx.globalCompositeOperation = "multiply";
+      ctx.globalAlpha = 0.35;
+      ctx.lineWidth = lineWidth * 7;
+    } else {
+      ctx.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = lineWidth;
+    }
+    
+    ctx.strokeStyle = tool === "eraser" ? "rgba(0,0,0,1)" : color;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    
+    // 스무딩
+    const lp = lastPos.current;
+    const mx = (pos.x + lp.x) / 2;
+    const my = (pos.y + lp.y) / 2;
+    ctx.quadraticCurveTo(lp.x, lp.y, mx, my);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(mx, my);
+    lastPos.current = pos;
+  };
+
+  const endDraw = (e)=>{
+    if(!drawing.current) return;
+    drawing.current = false;
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    saveSnapshot();
+  };
+
+  const undo = ()=>{
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if(history.length === 0){ ctx.clearRect(0,0,canvas.width,canvas.height); return; }
+    const prev = history[history.length-1];
+    setHistory(h=>h.slice(0,-1));
+    setRedoStack(r=>[...r, canvas.toDataURL()]);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    if(prev){ const img=new Image(); img.onload=()=>ctx.drawImage(img,0,0); img.src=prev; }
+  };
+
+  const redo = ()=>{
+    if(!redoStack.length) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const next = redoStack[redoStack.length-1];
+    setRedoStack(r=>r.slice(0,-1));
+    setHistory(h=>[...h, canvas.toDataURL()]);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    const img=new Image(); img.onload=()=>ctx.drawImage(img,0,0); img.src=next;
+  };
+
+  const clear = ()=>{
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    setHistory(h=>[...h, canvas.toDataURL()]);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ls(storageKey, "");
+  };
+
+  const saveImg = ()=>{
+    const a = document.createElement("a");
+    a.href = canvasRef.current.toDataURL("image/png");
+    a.download = "손글씨.png";
+    a.click();
+  };
+
+  const COLORS = ["#1e1e2e","#4f46e5","#ef4444","#10b981","#f59e0b","#06b6d4","#ec4899","#000000"];
+  const TOOLS = [
+    {id:"pen",    n:"pen",       label:"펜"},
+    {id:"highlight",n:"highlight",label:"형광펜"},
+    {id:"eraser", n:"eraser",   label:"지우개"},
+  ];
+  const WIDTHS = [2,4,7,12];
+
+  return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"#fafafa"}}>
+      {/* 툴바 */}
+      <div style={{background:"#fff",borderBottom:"1px solid #f1f5f9",padding:"8px 12px",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",flexShrink:0}}>
+        
+        {/* 도구 선택 */}
+        <div style={{display:"flex",gap:4,background:"#f3f4f6",borderRadius:10,padding:3}}>
+          {TOOLS.map(t=>(
+            <button key={t.id} onClick={()=>setTool(t.id)}
+              style={{padding:"7px 10px",borderRadius:8,border:"none",background:tool===t.id?"#fff":"transparent",boxShadow:tool===t.id?"0 1px 4px rgba(0,0,0,.12)":"none",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontSize:11,color:tool===t.id?A:"#6b7280",fontWeight:tool===t.id?600:400}}>
+              <Ic n={t.n} size={16} color={tool===t.id?A:"#6b7280"}/>{t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* 굵기 */}
+        <div style={{display:"flex",gap:5,alignItems:"center",marginLeft:2}}>
+          {WIDTHS.map(w=>(
+            <button key={w} onClick={()=>setLineWidth(w)}
+              style={{width:w+16,height:w+16,borderRadius:"50%",border:`2px solid ${lineWidth===w?A:"#d1d5db"}`,background:lineWidth===w?A:"#fff",cursor:"pointer",transition:"all .15s"}}/>
+          ))}
+        </div>
+
+        {/* 컬러 */}
+        <div style={{display:"flex",gap:5,flexWrap:"wrap",marginLeft:2}}>
+          {COLORS.map(c=>(
+            <button key={c} onClick={()=>setColor(c)}
+              style={{width:24,height:24,borderRadius:"50%",background:c,border:`3px solid ${color===c?"#4f46e5":"transparent"}`,cursor:"pointer",boxShadow:"0 1px 3px rgba(0,0,0,.2)"}}/>
+          ))}
+          <input type="color" value={color} onChange={e=>setColor(e.target.value)}
+            style={{width:24,height:24,borderRadius:"50%",border:"2px dashed #d1d5db",cursor:"pointer",padding:0,background:"none"}}/>
+        </div>
+
+        {/* 액션 버튼 */}
+        <div style={{display:"flex",gap:4,marginLeft:"auto"}}>
+          <button onClick={undo} title="실행취소" style={{padding:"7px 8px",borderRadius:8,border:"1.5px solid #e5e7eb",background:"#fff",cursor:"pointer",display:"flex"}}><Ic n="undo2" size={16} color="#6b7280"/></button>
+          <button onClick={redo} title="다시실행" style={{padding:"7px 8px",borderRadius:8,border:"1.5px solid #e5e7eb",background:"#fff",cursor:"pointer",display:"flex",transform:"scaleX(-1)"}}><Ic n="undo2" size={16} color="#6b7280"/></button>
+          <button onClick={saveImg} title="이미지 저장" style={{padding:"7px 8px",borderRadius:8,border:"1.5px solid #e5e7eb",background:"#fff",cursor:"pointer",display:"flex"}}><Ic n="image" size={16} color="#059669"/></button>
+          <button onClick={clear} title="전체 지우기" style={{padding:"7px 8px",borderRadius:8,border:"1.5px solid #fecaca",background:"#fff5f5",cursor:"pointer",display:"flex"}}><Ic n="trash2" size={16} color="#ef4444"/></button>
+        </div>
+      </div>
+
+      {/* 캔버스 */}
+      <div style={{flex:1,position:"relative",overflow:"hidden",touchAction:"none"}}>
+        {/* 줄 배경 */}
+        <div style={{position:"absolute",inset:0,backgroundImage:"repeating-linear-gradient(transparent, transparent 31px, #e5e7eb 31px, #e5e7eb 32px)",backgroundSize:"100% 32px",pointerEvents:"none"}}/>
+        <canvas
+          ref={canvasRef}
+          style={{position:"absolute",inset:0,width:"100%",height:"100%",cursor:tool==="eraser"?"cell":"crosshair",touchAction:"none"}}
+          onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
+          onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
+        />
+      </div>
+    </div>
+  );
+}
+
+async function aiSummary(title,note,key){
+  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:`회의 노트를 분석해서 순수 JSON만 반환하세요(코드블록 없이):\n{"overview":"요약 2~3문장","bullets":["핵심1","핵심2","핵심3"],"todos":["할일1","할일2"],"decisions":["결정사항"],"nextSteps":["다음단계"],"sentiment":"긍정적|중립|논의중"}\n\n회의: ${title}\n${note}`}]})});
   const d=await r.json();return JSON.parse(d.content[0].text.replace(/```json|```/g,"").trim());
 }
-async function aiChat(title,note,history,msg){
+async function aiChat(title,note,history,msg,key){
   const messages=[{role:"user",content:`당신은 아래 회의 노트의 어시스턴트입니다. 한국어로만 답하세요.\n[회의: ${title}]\n${note}`},{role:"assistant",content:"확인했습니다. 무엇이 궁금하신가요?"},...history.flatMap(m=>[{role:"user",content:m.q},{role:"assistant",content:m.a}]),{role:"user",content:msg}];
-  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages})});
+  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages})});
   const d=await r.json();return d.content[0].text;
 }
 
@@ -207,7 +421,9 @@ function App(){
   // Firebase 설정 고정 (설정화면 불필요)
   const config = {apiKey:"AIzaSyBWVMtkplQIS4TjcE08S2BA9U3cAjs_BQI", projectId:"meetingnotes-b22ba"};
   const[auth,setAuth]=useState(()=>ls("mn-auth"));
+  const[claudeKey,setClaudeKey]=useState(()=>ls("mn-claude-key")||"");
   useEffect(()=>{ls("mn-auth",auth);},[auth]);
+  useEffect(()=>{if(claudeKey)ls("mn-claude-key",claudeKey);},[claudeKey]);
 
   const[docs,setDocs]=useState(STARTER);
   const[selId,setSelId]=useState(STARTER[0].id);
@@ -262,16 +478,51 @@ function App(){
   const addTag=()=>{if(!tagIn.trim())return;upd({tags:[...(doc?.tags||[]),tagIn.trim()]});setTagIn("");setShowTag(false);};
   const startRec=async()=>{try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});const mr=new MediaRecorder(stream);chunkRef.current=[];setElapsed(0);setAudioUrl("");mr.ondataavailable=e=>{if(e.data.size>0)chunkRef.current.push(e.data);};mr.onstop=()=>{stream.getTracks().forEach(t=>t.stop());setAudioUrl(URL.createObjectURL(new Blob(chunkRef.current,{type:"audio/webm"})));upd({recordings:[{id:`r-${Date.now()}`,name:`${doc?.title} 녹음`,time:fmt(elapsed),at:new Date().toLocaleString("ko-KR")},...(doc?.recordings||[])]});};recRef.current=mr;mr.start();setIsRec(true);timerRef.current=setInterval(()=>setElapsed(p=>p+1),1000);}catch{alert("마이크 권한이 필요합니다.");}};
   const stopRec=()=>{recRef.current?.stop();setIsRec(false);clearInterval(timerRef.current);};
-  const genSummary=async()=>{if(!doc)return;setSumLoad(true);setSumErr("");try{upd({aiSummary:await aiSummary(doc.title,doc.note)});}catch(e){setSumErr(e.message||"오류");}finally{setSumLoad(false);}};
-  const sendChat=async()=>{if(!chatIn.trim()||chatLoad)return;const q=chatIn.trim();setChatIn("");setChatLoad(true);try{const a=await aiChat(doc?.title,doc?.note,chat,q);setChat(p=>[...p,{q,a}]);}catch{setChat(p=>[...p,{q,a:"오류가 발생했습니다."}]);}finally{setChatLoad(false);}};
+  const genSummary=async()=>{if(!doc)return;if(claudeKey==="SKIP")return setSumErr("AI 기능이 비활성화되어 있습니다. 설정에서 API Key를 입력해주세요.");setSumLoad(true);setSumErr("");try{upd({aiSummary:await aiSummary(doc.title,doc.note,claudeKey)});}catch(e){setSumErr(e.message||"오류");}finally{setSumLoad(false);}};
+  const sendChat=async()=>{if(!chatIn.trim()||chatLoad)return;const q=chatIn.trim();setChatIn("");setChatLoad(true);try{const a=await aiChat(doc?.title,doc?.note,chat,q,claudeKey);setChat(p=>[...p,{q,a}]);}catch{setChat(p=>[...p,{q,a:"오류가 발생했습니다."}]);}finally{setChatLoad(false);}};
   const exportDoc=()=>{if(!doc)return;const s=doc.aiSummary;dlTxt(`${doc.title}.txt`,[`■ ${doc.title}`,`날짜: ${doc.date}  태그: ${doc.tags?.join(", ")}`,"",s?`[AI 요약]\n${s.overview}\n\n[핵심]\n${s.bullets?.map(b=>`• ${b}`).join("\n")}\n\n[할 일]\n${s.todos?.map(t=>`☐ ${t}`).join("\n")}`:"[요약 없음]","","[원문]",doc.note].join("\n"));};
 
   const syncColor={synced:"#059669",syncing:"#f59e0b",error:"#ef4444"}[syncSt]||"#9ca3af";
   const syncLabel={synced:"저장됨",syncing:"저장 중...",error:"동기화 오류"}[syncSt]||"오프라인";
 
-  const TABS=[{id:"note",n:"note",label:"노트"},{id:"preview",n:"eye",label:"미리보기"},{id:"record",n:"mic",label:"녹음"},{id:"summary",n:"sparkles",label:"AI요약"},{id:"chat",n:"chat",label:"AI대화"}];
+  const TABS=[{id:"note",n:"note",label:"노트"},{id:"preview",n:"eye",label:"미리보기"},{id:"write",n:"pen",label:"손글씨"},{id:"record",n:"mic",label:"녹음"},{id:"summary",n:"sparkles",label:"AI요약"},{id:"chat",n:"chat",label:"AI대화"}];
 
   if(!auth) return <AuthScreen config={config} onAuth={a=>setAuth(a)}/>;
+  if(!claudeKey){
+    const inputRef = React.useRef(null);
+    return(
+      <div style={{minHeight:"100dvh",background:"linear-gradient(160deg,#eef2ff,#f8fafc)",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px 16px",fontFamily:"'Noto Sans KR',sans-serif"}}>
+        <div style={{width:"100%",maxWidth:400,background:"#fff",borderRadius:24,padding:"36px 28px",boxShadow:"0 8px 48px rgba(79,70,229,.13)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:28}}>
+            <div style={{width:44,height:44,borderRadius:14,background:A,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic n="sparkles" size={22} color="#fff"/></div>
+            <div><div style={{fontSize:17,fontWeight:700,color:"#111827"}}>Claude AI 연결</div><div style={{fontSize:12,color:"#9ca3af"}}>AI 요약 · AI 대화 기능</div></div>
+          </div>
+          <div style={{fontSize:22,fontWeight:700,color:"#111827",fontFamily:"'DM Serif Display',serif",marginBottom:8}}>Anthropic API Key</div>
+          <div style={{fontSize:13,color:"#6b7280",lineHeight:1.75,marginBottom:16}}>최초 1회만 입력하면 이 기기에 저장됩니다. 다음부터는 자동 로그인!</div>
+          <div style={{background:"#f0fdf4",border:"1.5px solid #d1fae5",borderRadius:12,padding:"12px 14px",marginBottom:16,display:"flex",gap:10}}>
+            <Ic n="shield" size={15} color="#059669" st={{flexShrink:0,marginTop:1}}/>
+            <div style={{fontSize:12,color:"#065f46",lineHeight:1.7}}><strong>보안:</strong> 키는 이 기기에만 저장됩니다. 서버나 코드에 전송되지 않습니다.</div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div>
+              <label style={{fontSize:13,fontWeight:600,color:"#374151",display:"block",marginBottom:6}}>API Key</label>
+              <input id="ck-input" type="password" placeholder="sk-ant-api03-..." style={{width:"100%",border:"1.5px solid #e5e7eb",borderRadius:12,padding:"13px 14px",fontSize:14,color:"#374151",background:"#fafafa",fontFamily:"inherit"}}/>
+            </div>
+            <button onClick={()=>{
+              const v=document.getElementById("ck-input").value.trim();
+              if(v.startsWith("sk-ant")){setClaudeKey(v);}
+              else alert("올바른 API Key를 입력해주세요.\nsk-ant-... 형태로 시작합니다.");
+            }} style={{background:A,color:"#fff",border:"none",borderRadius:13,padding:"15px",fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 4px 14px rgba(79,70,229,.3)"}}>
+              저장하고 시작하기 →
+            </button>
+            <button onClick={()=>setClaudeKey("SKIP")} style={{background:"none",border:"none",color:"#9ca3af",fontSize:13,cursor:"pointer",padding:"4px 0",fontFamily:"inherit"}}>
+              AI 기능 없이 사용하기
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const IST="calc(env(safe-area-inset-top,0px) + 14px)";
   const ISB="env(safe-area-inset-bottom,0px)";
@@ -345,7 +596,7 @@ function App(){
                     <div style={{position:"absolute",right:0,top:"calc(100% + 6px)",background:"#fff",border:"1.5px solid #f1f5f9",borderRadius:14,boxShadow:"0 8px 32px rgba(0,0,0,.1)",zIndex:200,width:180,overflow:"hidden"}}>
                       <button onClick={exportDoc} style={{width:"100%",textAlign:"left",padding:"13px 16px",border:"none",background:"none",cursor:"pointer",fontSize:14,color:"#374151",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #f9fafb"}}><Ic n="download" size={15} color="#059669"/>내보내기</button>
                       <button onClick={manualSync} style={{width:"100%",textAlign:"left",padding:"13px 16px",border:"none",background:"none",cursor:"pointer",fontSize:14,color:"#374151",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #f9fafb"}}><Ic n="refresh" size={15} color={A}/>동기화</button>
-                      <button onClick={delDoc} style={{width:"100%",textAlign:"left",padding:"13px 16px",border:"none",background:"none",cursor:"pointer",fontSize:14,color:"#ef4444",display:"flex",alignItems:"center",gap:10}}><Ic n="trash" size={15} color="#ef4444"/>삭제</button>
+                      <button onClick={delDoc} style={{width:"100%",textAlign:"left",padding:"13px 16px",border:"none",background:"none",cursor:"pointer",fontSize:14,color:"#ef4444",display:"flex",alignItems:"center",gap:10,borderBottom:"1px solid #f9fafb"}}><Ic n="trash" size={15} color="#ef4444"/>삭제</button><button onClick={()=>{localStorage.removeItem("mn-claude-key");setClaudeKey("");setShowMenu(false);}} style={{width:"100%",textAlign:"left",padding:"13px 16px",border:"none",background:"none",cursor:"pointer",fontSize:14,color:"#374151",fontFamily:"inherit",display:"flex",alignItems:"center",gap:10}}><Ic n="settings" size={15} color="#6b7280"/>AI Key 변경</button>
                     </div>
                   )}
                 </div>
@@ -374,6 +625,10 @@ function App(){
 
             {tab==="preview"&&doc&&(
               <div style={{flex:1,overflowY:"auto",padding:"16px"}}><MD text={doc.note}/><div style={{height:80}}/></div>
+            )}
+
+            {tab==="write"&&(
+              <HandwritingCanvas docId={selId} onSave={snap=>upd({handwriting:snap})}/>
             )}
 
             {tab==="record"&&(
