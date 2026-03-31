@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+
+<!-- PWA 필수 메타 -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="할 일">
+<meta name="application-name" content="할 일">
+<meta name="theme-color" content="#2D4A3E" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141412" media="(prefers-color-scheme: dark)">
+
+<!-- Apple Touch Icons (인라인 SVG → data URI) -->
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='112' fill='%232D4A3E'/%3E%3Ctext x='256' y='340' font-size='260' text-anchor='middle' font-family='sans-serif'%3E✅%3C/text%3E%3C/svg%3E">
+
+<title>할 일 목록</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #F5F3EF;
+    --surface: #FFFFFF;
+    --surface2: #EDEBE6;
+    --text: #1A1814;
+    --text-muted: #8A8680;
+    --accent: #2D4A3E;
+    --accent-light: #E8F0ED;
+    --accent-mid: #5C8A78;
+    --border: rgba(26,24,20,0.10);
+    --red: #C94B4B;
+    --amber: #C97A2A;
+    --green: #2D7D5A;
+    --blue: #2D4A8A;
+    --shadow: 0 2px 16px rgba(26,24,20,0.07);
+    --radius: 16px;
+    --radius-sm: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141412;
+      --surface: #1E1E1B;
+      --surface2: #272724;
+      --text: #F0EDE6;
+      --text-muted: #7A786F;
+      --accent: #6BAF95;
+      --accent-light: #1A2E26;
+      --accent-mid: #4D8A70;
+      --border: rgba(240,237,230,0.08);
+      --red: #E07070;
+      --amber: #E09A50;
+      --green: #5DB88A;
+      --blue: #6080C0;
+      --shadow: 0 2px 16px rgba(0,0,0,0.3);
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    font-family: 'Noto Sans KR', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  /* ── PWA 설치 배너 ── */
+  #install-banner {
+    display: none;
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--accent);
+    color: #fff;
+    border-radius: 99px;
+    padding: 13px 22px;
+    font-size: 14px;
+    font-weight: 500;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+    cursor: pointer;
+    z-index: 9999;
+    gap: 10px;
+    align-items: center;
+    white-space: nowrap;
+    animation: bounceUp 0.4s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  #install-banner.show { display: flex; }
+  @keyframes bounceUp {
+    from { opacity:0; transform: translateX(-50%) translateY(20px); }
+    to   { opacity:1; transform: translateX(-50%) translateY(0); }
+  }
+  #install-banner .close-x {
+    background: rgba(255,255,255,0.25);
+    border: none;
+    color: #fff;
+    border-radius: 50%;
+    width: 22px; height: 22px;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+
+  /* LAYOUT */
+  .app { display: grid; grid-template-columns: 340px 1fr; grid-template-rows: auto 1fr; min-height: 100vh; max-height: 100vh; overflow: hidden; }
+
+  .header {
+    grid-column: 1 / -1;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 18px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .header-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    color: var(--text);
+    letter-spacing: -0.3px;
+  }
+  .header-date {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-weight: 300;
+  }
+
+  /* SIDEBAR */
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 24px 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  /* STATS */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .stat-card {
+    background: var(--surface2);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    text-align: center;
+  }
+  .stat-num {
+    font-family: 'DM Serif Display', serif;
+    font-size: 28px;
+    color: var(--text);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .stat-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+  .stat-card.accent { background: var(--accent-light); }
+  .stat-card.accent .stat-num { color: var(--accent); }
+
+  /* PROGRESS */
+  .progress-wrap { margin-top: 4px; }
+  .progress-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+  .progress-bar {
+    height: 6px;
+    background: var(--surface2);
+    border-radius: 99px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 99px;
+    transition: width 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  /* FORM */
+  .form-section { display: flex; flex-direction: column; gap: 12px; }
+  .section-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 2px;
+  }
+
+  .input-field {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: 13px 16px;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 15px;
+    color: var(--text);
+    transition: all 0.2s;
+    outline: none;
+    resize: none;
+  }
+  .input-field::placeholder { color: var(--text-muted); }
+  .input-field:focus {
+    border-color: var(--accent);
+    background: var(--surface);
+    box-shadow: 0 0 0 3px rgba(45,74,62,0.12);
+  }
+
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  select.input-field {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%238A8680' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    padding-right: 36px;
+    cursor: pointer;
+  }
+
+  .btn-add {
+    width: 100%;
+    padding: 14px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.3px;
+  }
+  .btn-add:active { transform: scale(0.97); opacity: 0.9; }
+  .btn-add:hover { opacity: 0.88; }
+
+  /* CATEGORY FILTER */
+  .cats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .cat-btn {
+    padding: 7px 14px;
+    border-radius: 99px;
+    font-size: 13px;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-weight: 400;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.18s;
+    white-space: nowrap;
+  }
+  .cat-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 500;
+  }
+  .cat-btn:not(.active):hover { border-color: var(--accent-mid); color: var(--text); }
+
+  /* MAIN */
+  .main { overflow-y: auto; padding: 24px 28px; background: var(--bg); }
+
+  .todos-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .todos-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 18px;
+    color: var(--text);
+  }
+  .sort-btn {
+    font-size: 13px;
+    color: var(--text-muted);
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    padding: 6px 14px;
+    font-family: 'Noto Sans KR', sans-serif;
+    cursor: pointer;
+    transition: all 0.18s;
+  }
+  .sort-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  /* TODO LIST */
+  .todo-list { display: flex; flex-direction: column; gap: 10px; }
+
+  .todo-item {
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    box-shadow: var(--shadow);
+    transition: all 0.25s;
+    animation: slideIn 0.25s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .todo-item:before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 4px;
+    background: var(--accent);
+    border-radius: 2px 0 0 2px;
+  }
+  .todo-item.pri-high:before { background: var(--red); }
+  .todo-item.pri-low:before  { background: var(--text-muted); }
+  .todo-item.done { opacity: 0.55; }
+
+  .check-btn {
+    width: 22px; height: 22px;
+    border-radius: 6px;
+    border: 2px solid var(--border);
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: all 0.18s;
+    display: flex; align-items: center; justify-content: center;
+    margin-top: 2px;
+    background: transparent;
+  }
+  .check-btn.checked {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .check-btn.checked::after {
+    content: '';
+    width: 5px; height: 9px;
+    border: 2px solid #fff;
+    border-top: none; border-left: none;
+    transform: rotate(45deg) translateY(-1px);
+  }
+
+  .todo-body { flex: 1; min-width: 0; }
+  .todo-text {
+    font-size: 15px;
+    color: var(--text);
+    word-break: break-word;
+    transition: all 0.2s;
+  }
+  .done .todo-text { text-decoration: line-through; color: var(--text-muted); }
+
+  .todo-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+  }
+  .tag {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 99px;
+    letter-spacing: 0.2px;
+  }
+  .tag-cat { background: var(--accent-light); color: var(--accent); }
+  .tag-pri-high { background: #FDEAEA; color: var(--red); }
+  .tag-pri-mid  { background: var(--surface2); color: var(--text-muted); }
+  .tag-pri-low  { background: var(--surface2); color: var(--text-muted); }
+  @media (prefers-color-scheme: dark) {
+    .tag-pri-high { background: rgba(224,112,112,0.15); }
+  }
+  .todo-date { font-size: 11px; color: var(--text-muted); }
+
+  .del-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 6px;
+    opacity: 0.4;
+    transition: all 0.18s;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .del-btn svg { width: 16px; height: 16px; }
+  .del-btn:hover { opacity: 1; color: var(--red); background: rgba(201,75,75,0.08); }
+
+  /* SECTION DIVIDER */
+  .section-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 20px 0 12px;
+  }
+  .divider-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    white-space: nowrap;
+  }
+  .divider-line { flex: 1; height: 1px; background: var(--border); }
+
+  /* EMPTY */
+  .empty {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--text-muted);
+  }
+  .empty-icon {
+    font-size: 40px;
+    margin-bottom: 12px;
+    opacity: 0.4;
+  }
+  .empty-text { font-size: 15px; }
+
+  /* MOBILE */
+  @media (max-width: 600px) {
+    .app {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto auto 1fr;
+      max-height: none;
+    }
+    .header { grid-column: 1; }
+    .sidebar {
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+      max-height: none;
+      padding: 16px;
+      gap: 14px;
+    }
+    .main { padding: 16px; }
+  }
+
+  @media (min-width: 601px) and (max-width: 900px) {
+    .app { grid-template-columns: 290px 1fr; }
+    .sidebar { padding: 18px 16px; }
+    .main { padding: 18px 20px; }
+  }
+
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="header">
+    <div class="header-title">오늘의 할 일</div>
+    <div class="header-date" id="today-date"></div>
+  </header>
+
+  <aside class="sidebar">
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-num" id="total-count">0</div>
+        <div class="stat-label">전체</div>
+      </div>
+      <div class="stat-card accent">
+        <div class="stat-num" id="done-count">0</div>
+        <div class="stat-label">완료</div>
+      </div>
+      <div class="stat-card" style="grid-column: 1/-1;">
+        <div class="progress-wrap">
+          <div class="progress-label">
+            <span>진행률</span>
+            <span id="pct-label">0%</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-section">
+      <div class="section-label">새 할 일 추가</div>
+      <input class="input-field" type="text" id="todo-input" placeholder="할 일을 입력하세요" maxlength="100" />
+      <div class="row2">
+        <select class="input-field" id="cat-select">
+          <option value="업무">💼 업무</option>
+          <option value="개인">🙋 개인</option>
+          <option value="쇼핑">🛒 쇼핑</option>
+          <option value="건강">🏃 건강</option>
+          <option value="기타">📌 기타</option>
+        </select>
+        <select class="input-field" id="pri-select">
+          <option value="중간">보통</option>
+          <option value="높음">🔴 높음</option>
+          <option value="낮음">낮음</option>
+        </select>
+      </div>
+      <button class="btn-add" id="add-btn">추가하기</button>
+    </div>
+
+    <div>
+      <div class="section-label">카테고리</div>
+      <div class="cats" id="cat-filters"></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="todos-header">
+      <div class="todos-title" id="list-title">모든 할 일</div>
+      <button class="sort-btn" id="sort-btn">마감순</button>
+    </div>
+    <div class="todo-list" id="todo-list"></div>
+  </main>
+</div>
+
+<!-- PWA 설치 배너 -->
+<div id="install-banner">
+  <span>📲 홈 화면에 앱으로 추가</span>
+  <button class="close-x" id="install-btn-close" aria-label="닫기">✕</button>
+</div>
+
+<script>
+/* ─────────── 앱 로직 ─────────── */
+const STORAGE_KEY = 'todo_app_v2';
+let todos = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+let filterCat = '전체';
+let sortMode = 'recent';
+
+function save() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(todos));
+}
+
+function todayStr() {
+  return new Date().toLocaleDateString('ko-KR', { year:'numeric', month:'long', day:'numeric', weekday:'long' });
+}
+
+function formatDate(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  const diff = Math.floor((now - d) / 60000);
+  if (diff < 1) return '방금 전';
+  if (diff < 60) return diff + '분 전';
+  if (diff < 1440) return Math.floor(diff/60) + '시간 전';
+  return d.toLocaleDateString('ko-KR', { month:'short', day:'numeric' });
+}
+
+function renderStats() {
+  const total = todos.length;
+  const done = todos.filter(t => t.done).length;
+  const pct = total ? Math.round(done/total*100) : 0;
+  document.getElementById('total-count').textContent = total;
+  document.getElementById('done-count').textContent = done;
+  document.getElementById('pct-label').textContent = pct + '%';
+  document.getElementById('progress-fill').style.width = pct + '%';
+}
+
+function renderFilters() {
+  const cats = ['전체', ...new Set(todos.map(t => t.cat))];
+  const el = document.getElementById('cat-filters');
+  el.innerHTML = cats.map(c =>
+    `<button class="cat-btn ${c===filterCat?'active':''}" data-cat="${c}">${c}</button>`
+  ).join('');
+  el.querySelectorAll('.cat-btn').forEach(b =>
+    b.addEventListener('click', () => { filterCat = b.dataset.cat; render(); })
+  );
+}
+
+function renderList() {
+  let list = todos.filter(t => filterCat==='전체' || t.cat===filterCat);
+  if (sortMode === 'recent') list = list.slice().sort((a,b) => b.id-a.id);
+  else list = list.slice().sort((a,b) => {
+    const p = {높음:0,중간:1,낮음:2};
+    return p[a.pri]-p[b.pri];
+  });
+
+  const pending = list.filter(t => !t.done);
+  const done = list.filter(t => t.done);
+  const el = document.getElementById('todo-list');
+
+  if (!list.length) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">할 일이 없습니다</div></div>`;
+    return;
+  }
+
+  let html = pending.map(t => todoHTML(t)).join('');
+  if (done.length) {
+    html += `<div class="section-divider"><span class="divider-line"></span><span class="divider-label">완료 ${done.length}개</span><span class="divider-line"></span></div>`;
+    html += done.map(t => todoHTML(t)).join('');
+  }
+  el.innerHTML = html;
+
+  el.querySelectorAll('.check-btn').forEach(b =>
+    b.addEventListener('click', () => {
+      const t = todos.find(x => x.id == b.dataset.id);
+      if (t) { t.done = !t.done; save(); render(); }
+    })
+  );
+  el.querySelectorAll('.del-btn').forEach(b =>
+    b.addEventListener('click', () => {
+      todos = todos.filter(x => x.id != b.dataset.id);
+      save(); render();
+    })
+  );
+}
+
+function todoHTML(t) {
+  const priTag = t.pri==='높음'
+    ? '<span class="tag tag-pri-high">높음</span>'
+    : t.pri==='낮음'
+    ? '<span class="tag tag-pri-low">낮음</span>'
+    : '<span class="tag tag-pri-mid">보통</span>';
+  const priClass = t.pri==='높음' ? 'pri-high' : t.pri==='낮음' ? 'pri-low' : '';
+  return `<div class="todo-item ${t.done?'done':''} ${priClass}">
+    <div class="check-btn ${t.done?'checked':''}" data-id="${t.id}"></div>
+    <div class="todo-body">
+      <div class="todo-text">${escHtml(t.text)}</div>
+      <div class="todo-meta">
+        <span class="tag tag-cat">${escHtml(t.cat)}</span>
+        ${priTag}
+        <span class="todo-date">${formatDate(t.created)}</span>
+      </div>
+    </div>
+    <button class="del-btn" data-id="${t.id}" title="삭제">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+        <path d="M3 4h10M6 4V3h4v1M5 4l.5 9h5L11 4"/>
+      </svg>
+    </button>
+  </div>`;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function render() {
+  renderStats();
+  renderFilters();
+  renderList();
+  const title = filterCat === '전체' ? '모든 할 일' : filterCat;
+  document.getElementById('list-title').textContent = title;
+}
+
+function addTodo() {
+  const text = document.getElementById('todo-input').value.trim();
+  if (!text) { document.getElementById('todo-input').focus(); return; }
+  todos.push({
+    id: Date.now(),
+    text,
+    cat: document.getElementById('cat-select').value,
+    pri: document.getElementById('pri-select').value,
+    done: false,
+    created: new Date().toISOString()
+  });
+  document.getElementById('todo-input').value = '';
+  document.getElementById('pri-select').value = '중간';
+  save();
+  render();
+  document.getElementById('todo-input').focus();
+}
+
+document.getElementById('add-btn').addEventListener('click', addTodo);
+document.getElementById('todo-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') addTodo();
+});
+document.getElementById('sort-btn').addEventListener('click', () => {
+  sortMode = sortMode === 'recent' ? 'priority' : 'recent';
+  document.getElementById('sort-btn').textContent = sortMode==='recent' ? '마감순' : '최신순';
+  render();
+});
+
+document.getElementById('today-date').textContent = todayStr();
+render();
+
+/* ─────────── PWA: Manifest (동적 생성) ─────────── */
+const manifestData = {
+  name: '할 일 목록',
+  short_name: '할 일',
+  description: '오늘의 할 일을 관리하는 앱',
+  start_url: '.',
+  display: 'standalone',
+  background_color: '#F5F3EF',
+  theme_color: '#2D4A3E',
+  orientation: 'portrait-primary',
+  icons: [
+    {
+      src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='112' fill='%232D4A3E'/%3E%3Ctext x='256' y='340' font-size='260' text-anchor='middle' font-family='sans-serif'%3E✅%3C/text%3E%3C/svg%3E",
+      sizes: '512x512',
+      type: 'image/svg+xml',
+      purpose: 'any maskable'
+    }
+  ]
+};
+const blob = new Blob([JSON.stringify(manifestData)], {type:'application/json'});
+const manifestURL = URL.createObjectURL(blob);
+const link = document.createElement('link');
+link.rel = 'manifest';
+link.href = manifestURL;
+document.head.appendChild(link);
+
+/* ─────────── PWA: 설치 배너 ─────────── */
+let deferredPrompt = null;
+const banner = document.getElementById('install-banner');
+
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredPrompt = e;
+  banner.classList.add('show');
+});
+
+banner.addEventListener('click', async (e) => {
+  if (e.target.id === 'install-btn-close') {
+    banner.classList.remove('show');
+    return;
+  }
+  if (deferredPrompt) {
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    deferredPrompt = null;
+    banner.classList.remove('show');
+  }
+});
+
+window.addEventListener('appinstalled', () => {
+  banner.classList.remove('show');
+  deferredPrompt = null;
+});
+</script>
+</body>
+</html>
